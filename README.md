@@ -1,4 +1,5 @@
 # 服务器重启之后需要运行下面的命令来让灵巧手正常工作
+conda activate dexmani
 source install/setup.zsh
 sudo chmod 666 /dev/ttyUSB0
 ros2 launch leap_hand launch_leap.py
