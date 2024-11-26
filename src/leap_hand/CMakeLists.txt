@@ -32,6 +32,7 @@ ament_package()
 install(PROGRAMS
   scripts/leaphand_node.py
   scripts/ros2_example.py
+  scripts/keyboard_control.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
