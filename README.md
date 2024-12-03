@@ -19,8 +19,7 @@ ros2 launch leap_hand launch_leap.py
 ## 自动摆动
 ros2 launch leap_hand launch_leap.py
 ## 键盘控制
-ros2 run leap_hand leaphand_node.py
-ros2 run leap_hand keyboard_control.py
+ros2 launch leap_hand launch_leap_keyboard.py
 
 # 其他命令
 ## 创建虚拟环境

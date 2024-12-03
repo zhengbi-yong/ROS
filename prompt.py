@@ -307,3 +307,421 @@ qwertyuiop分别控制0-9号关节增大0.1弧度，asdfghjkl;分别控制0-9号
 现在我有一个抓取的任务，需要给机械手一个抓取的姿势，然后我的初步打算是机械手开一个节点一直监听程序传来的信号，如果有信号就去执行，否则就保持上一个状态的动作，请问这样做是否合理，如果不合理，应该怎么做？如果合理的话我应该如何设计我的程序去给出这个指令，以及我如果想制作一个demo程序，我应该如何写？
 
 请你详细介绍一下ROS2的Action接口，因为我的设想是这样的，就是通过摄像头等传感器去获取周围环境的信息，然后发现需要被抓握的物体之后机械臂将灵巧手移动到可以抓握的范围之内，这个过程是有反馈的，并且灵巧手在执行抓握的过程中也要使用反馈来保证抓握的成功，所以我觉得Action接口可能是一个比较好的选择，但是我对ROS2的Action接口不是很了解，所以请你详细介绍一下ROS2的Action接口，以及如何使用Action接口来实现我的设想。我的深度学习模型给出的控制信号应该是一个16维的向量，分别代表灵巧手的各个关节的角度。
+
+
+我现在想给一个新设备写一个ros2的包，我应该做哪些工作？
+```python
+import sys
+sys.path.append("../lib")
+import unitree_arm_interface
+import time
+import numpy as np
+np.set_printoptions(precision=3, suppress=True)
+
+print("Press ctrl+\ to quit process.")
+
+arm =  unitree_arm_interface.ArmInterface(hasGripper=True)
+armState = unitree_arm_interface.ArmFSMState
+arm.loopOn()
+
+# 1. highcmd_basic : armCtrlInJointCtrl
+arm.labelRun("forward")
+arm.startTrack(armState.JOINTCTRL)
+jnt_speed = 1.0
+for i in range(0, 1000):
+    # dp = directions * speed; include 7 joints
+    arm.jointCtrlCmd([0,0,0,-1,0,0,-1], jnt_speed)
+    time.sleep(arm._ctrlComp.dt)
+
+# 2. highcmd_basic : armCtrlByFSM
+arm.labelRun("forward")
+gripper_pos = 0.0
+jnt_speed = 2.0
+arm.MoveJ([0.5,0.1,0.1,0.5,-0.2,0.5], gripper_pos, jnt_speed)
+gripper_pos = -1.0
+cartesian_speed = 0.5
+arm.MoveL([0,0,0,0.45,-0.2,0.2], gripper_pos, cartesian_speed)
+gripper_pos = 0.0
+arm.MoveC([0,0,0,0.45,0,0.4], [0,0,0,0.45,0.2,0.2], gripper_pos, cartesian_speed)
+
+# 3. highcmd_basic : armCtrlInCartesian
+arm.labelRun("forward")
+arm.startTrack(armState.CARTESIAN)
+angular_vel = 0.3
+linear_vel = 0.3
+for i in range(0, 1000):
+    arm.cartesianCtrlCmd([0,0,0,0,0,-1,-1], angular_vel, linear_vel)
+    time.sleep(arm._ctrlComp.dt)
+
+arm.backToStart()
+arm.loopOff()
+```
+我的控制该设备运行的代码如上，请你帮我写一个名为unitreez1的ros2的包。
+
+
+我现在有一个名为arm_python_interface.cpp的文件，其中的内容如下
+```cpp
+#include <pybind11/pybind11.h>
+#include <pybind11/eigen.h>
+#include <pybind11/stl.h>
+#include "unitree_arm_sdk/control/unitreeArm.h"
+
+using namespace UNITREE_ARM;
+
+class ArmInterface : public unitreeArm
+{
+public:
+    ArmInterface(bool hasGripper):unitreeArm(hasGripper){};
+    ~ArmInterface(){};
+    void loopOn() { sendRecvThread->start();}
+    void loopOff() { sendRecvThread->shutdown();}
+    void setFsmLowcmd()
+    {
+        sendRecvThread->start();
+        setFsm(ArmFSMState::PASSIVE);
+        setFsm(ArmFSMState::LOWCMD);
+        sendRecvThread->shutdown();
+    }
+    ArmFSMState getCurrentState()
+    {
+        return _ctrlComp->recvState.state;
+    }
+};
+
+namespace py = pybind11;
+PYBIND11_MODULE(unitree_arm_interface, m){
+    using rvp = py::return_value_policy;
+
+    m.def("postureToHomo", &postureToHomo);
+    m.def("homoToPosture", &homoToPosture);
+
+    py::enum_<ArmFSMState>(m, "ArmFSMState")
+        .value("INVALID", ArmFSMState::INVALID)
+        .value("PASSIVE", ArmFSMState::PASSIVE)
+        .value("JOINTCTRL", ArmFSMState::JOINTCTRL)
+        .value("CARTESIAN", ArmFSMState::CARTESIAN)
+        .value("MOVEJ", ArmFSMState::MOVEJ)
+        .value("MOVEC", ArmFSMState::MOVEC)
+        .value("MOVEL", ArmFSMState::MOVEL)
+        .value("TEACH", ArmFSMState::TEACH)
+        .value("TEACHREPEAT", ArmFSMState::TEACHREPEAT)
+        .value("TOSTATE", ArmFSMState::TOSTATE)
+        .value("SAVESTATE", ArmFSMState::SAVESTATE)
+        .value("TRAJECTORY", ArmFSMState::TRAJECTORY)
+        .value("LOWCMD", ArmFSMState::LOWCMD)
+        ;
+
+    py::class_<LowlevelState>(m, "LowlevelState")
+        .def("getQ", &LowlevelState::getQ, rvp::reference_internal)
+        .def("getQd", &LowlevelState::getQd, rvp::reference_internal)
+        .def("getQTau", &LowlevelState::getTau, rvp::reference_internal) // typo error in the original code
+        .def("getTau", &LowlevelState::getTau, rvp::reference_internal)
+        .def("getGripperQ", &LowlevelState::getGripperQ, rvp::reference_internal)
+        ;
+
+    py::class_<CtrlComponents>(m, "CtrlComponents")
+        .def_readwrite("armModel", &CtrlComponents::armModel)
+        .def_readonly("dt", &CtrlComponents::dt)
+        ;
+
+    py::class_<Z1Model>(m, "Z1Model")
+        .def(py::init<Vec3, double, Vec3, Mat3>())
+        .def("checkInSingularity", &Z1Model::checkInSingularity)
+        .def("jointProtect", [](Z1Model& self, Vec6 q, Vec6 qd){
+            self.jointProtect(q, qd);
+            return std::make_pair(q, qd);
+        })
+        .def("getJointQMax", &Z1Model::getJointQMax, rvp::reference_internal)
+        .def("getJointQMin", &Z1Model::getJointQMin, rvp::reference_internal)
+        .def("getJointSpeedMax", &Z1Model::getJointSpeedMax, rvp::reference_internal)
+        .def("inverseKinematics", [](Z1Model& self, HomoMat Tdes, Vec6 qPast, bool checkInWorkSpace){
+            Vec6 q_result;
+            bool hasIK = self.inverseKinematics(Tdes, qPast, q_result, checkInWorkSpace);
+            return std::make_pair(hasIK, q_result);
+        })
+        .def("forwardKinematics", &Z1Model::forwardKinematics)
+        .def("inverseDynamics", &Z1Model::inverseDynamics)
+        .def("CalcJacobian", &Z1Model::CalcJacobian)
+        .def("solveQP", [](Z1Model& self, Vec6 twist, Vec6 qPast, double dt){
+            Vec6 qd_result;
+            self.solveQP(twist, qPast, qd_result, dt);
+            return qd_result;
+        })
+        ;
+
+    py::class_<ArmInterface>(m, "ArmInterface")
+        .def(py::init<bool>(), py::arg("hasGripper")=true)
+        .def_readwrite("q", &ArmInterface::q)
+        .def_readwrite("qd", &ArmInterface::qd)
+        .def_readwrite("tau", &ArmInterface::tau)
+        .def_readwrite("gripperQ", &ArmInterface::gripperQ)
+        .def_readwrite("gripperQd", &ArmInterface::gripperW)
+        .def_readwrite("gripperTau", &ArmInterface::gripperTau)
+        .def_readwrite("lowstate", &ArmInterface::lowstate)
+        .def_readwrite("_ctrlComp", &ArmInterface::_ctrlComp)
+        .def("setFsmLowcmd", &ArmInterface::setFsmLowcmd)
+        .def("getCurrentState", &ArmInterface::getCurrentState)
+        .def("loopOn", &ArmInterface::loopOn)
+        .def("loopOff", &ArmInterface::loopOff)
+        .def("setFsm", &ArmInterface::setFsm)
+        .def("backToStart", &ArmInterface::backToStart)
+        .def("labelRun", &ArmInterface::labelRun)
+        .def("labelSave", &ArmInterface::labelSave)
+        .def("teach", &ArmInterface::teach)
+        .def("teachRepeat", &ArmInterface::teachRepeat)
+        .def("calibration", &ArmInterface::calibration)
+        .def("MoveJ", py::overload_cast<Vec6, double>(&ArmInterface::MoveJ))
+        .def("MoveJ", py::overload_cast<Vec6, double, double>(&ArmInterface::MoveJ))
+        .def("MoveL", py::overload_cast<Vec6, double>(&ArmInterface::MoveL))
+        .def("MoveL", py::overload_cast<Vec6, double, double>(&ArmInterface::MoveL))
+        .def("MoveC", py::overload_cast<Vec6, Vec6, double>(&ArmInterface::MoveC))
+        .def("MoveC", py::overload_cast<Vec6, Vec6, double, double>(&ArmInterface::MoveC))
+        .def("startTrack", &ArmInterface::startTrack)
+        .def("sendRecv", &ArmInterface::sendRecv)
+        .def("setWait", &ArmInterface::setWait)
+        .def("jointCtrlCmd", &ArmInterface::jointCtrlCmd)
+        .def("cartesianCtrlCmd", &ArmInterface::cartesianCtrlCmd)
+        .def("setArmCmd", &ArmInterface::setArmCmd)
+        .def("setGripperCmd", &ArmInterface::setGripperCmd)
+        ;
+}
+```
+还有一个名为unitree_arm_interface.pyi的文件，内容如下
+```python
+import numpy as np
+from enum import IntEnum
+
+def postureToHomo(posture: np.ndarray, /) -> np.ndarray: ...
+
+def homoToPosture(T: np.ndarray, /) -> np.ndarray: ...
+
+class ArmFSMState(IntEnum):
+    INVALID = 0,
+    PASSIVE = 1,
+    JOINTCTRL = 2,
+    CARTESIAN = 3,
+    MOVEJ = 4,
+    MOVEL = 5,
+    MOVEC = 6,
+    TEACH = 7,
+    TEACHREPEAT = 8,
+    TOSTATE = 9,
+    SAVESTATE = 10,
+    TRAJECTORY = 11,
+    LOWCMD = 12
+
+class LowlevelState:
+    def getQ(self) -> np.array: ...
+
+    def getQd(self) -> np.array: ...
+    
+    def getTau(self) -> np.array: ...
+
+    def getGripperQ(self) -> np.array: ...
+
+class CtrlComponents:
+    @property
+    def armModel(self) -> Z1Model: ...
+    
+    @property
+    def dt(self) -> float: ...
+
+class Z1Model:
+    def __init__(self, endPosLocal: np.array, endEffectorMass: float, endEffectorCom: np.array, endEffectorInertia: np.ndarray, /): ...
+
+    def checkInSingularity(self, q: np.array, /) -> bool: ...
+
+    def forwardKinematics(self, q: np.array, index, /) -> np.ndarray: ...
+
+    def inverseKinematics(self, Tdes: np.ndarray, qPast: np.array, checkInWrokSpace: bool, /) -> bool: ...
+
+    def solveQP(self, twist: np.array, qPast: np.array, dt: float, /): ...
+
+    def CalcJacobian(self, q: np.array, /) -> np.ndarray: ...
+
+    def inverseDynamics(self, q: np.array, qd: np.array, qdd: np.array, Ftip: np.array, /) -> np.array: ...
+
+    def jointProtect(self, q: np.array, qd: np.array, /): ...
+
+    def getJointQMax(self) -> np.array: ...
+
+    def getJointQMin(self) -> np.array: ...
+
+    def getJointSpeedMax(self) -> np.array: ...
+
+class ArmInterface:
+    def __init__(self, hasGripper: bool, /) -> None: ...
+
+    def setFsm(self, fsm: ArmFSMState): ...
+
+    def setFsmLowcmd(self): ...
+
+    def getCurrentState(self) -> ArmFSMState: ...
+
+    def loopOn(self): ...
+    
+    def loopOff(self): ...
+
+    def backToStart(self): ...
+
+    def labelRun(self, label: str, /): ...
+
+    def labelSave(self, label: str, /): ...
+
+    def teach(self, label: str, /): ...
+
+    def teachRepeat(self, label: str, /): ...
+
+    def calibration(self): ...
+
+    def MoveJ(self, posture: np.ndarray, maxSpeed: float, /) -> bool: ...
+
+    def MoveJ(self, posture: np.ndarray, gripperPos: float, maxSpeed: float, /) -> bool: ...
+
+    def MoveL(self, posture: np.ndarray, maxSpeed: float, /) -> bool: ...
+
+    def MoveL(self, posture: np.ndarray, gripperPos: float, maxSpeed: float, /) -> bool: ...
+
+    def MoveC(self, middlePosture: np.ndarray, endPosture: np.ndarray, maxSpeed: float, /) -> bool: ...
+
+    def MoveC(self, middlePosture: np.ndarray, endPosture: np.ndarray, gripperPos: float, maxSpeed: float, /) -> bool: ...
+
+    def startTrack(self, fsm: ArmFSMState, /): ...
+
+    def sendRecv(self): ...
+
+    def setWait(self, Y_N: bool, /): ...
+
+    def jointCtrlCmd(self, directions: np.ndarray, jointSpeed: float, /): ...
+
+    def cartesianCtrlCmd(self, directions: np.ndarray, oriSpeed: float, posSpeed: float, /): ...
+
+    def setArmCmd(self, q: np.ndarray, qd: np.ndarray, tau: np.ndarray, /): ...
+
+    def setGripperCmd(self, gripperPos: float, gripperW: float, gripperTau: float, /): ...
+
+    @property
+    def lowstate(self) -> LowlevelState: ...
+
+    @property
+    def _ctrlComp(self) -> CtrlComponents: ...
+
+    @property
+    def q(self) -> np.array: ...
+
+    @property
+    def qd(self) -> np.array: ...
+
+    @property
+    def tau(self) -> np.array: ...
+
+    @property
+    def gripperQ(self) -> float: ...
+
+    @property
+    def gripperQd(self) -> float: ...
+
+    @property
+    def gripperTau(self) -> float: ...
+```
+我在运行下面文件的时候最开始会报错ModuleNotFoundError: No module named 'unitree_arm_interface'，在用cmake之后解决了这个错误。
+我运行的程序如下
+```python
+import sys
+sys.path.append("../lib")
+import unitree_arm_interface
+import time
+import numpy as np
+np.set_printoptions(precision=3, suppress=True)
+
+print("Press ctrl+\ to quit process.")
+
+arm =  unitree_arm_interface.ArmInterface(hasGripper=True)
+armState = unitree_arm_interface.ArmFSMState
+arm.loopOn()
+
+# 1. highcmd_basic : armCtrlInJointCtrl
+arm.labelRun("forward")
+arm.startTrack(armState.JOINTCTRL)
+jnt_speed = 1.0
+for i in range(0, 1000):
+    # dp = directions * speed; include 7 joints
+    arm.jointCtrlCmd([0,0,0,-1,0,0,-1], jnt_speed)
+    time.sleep(arm._ctrlComp.dt)
+
+# 2. highcmd_basic : armCtrlByFSM
+arm.labelRun("forward")
+gripper_pos = 0.0
+jnt_speed = 2.0
+arm.MoveJ([0.5,0.1,0.1,0.5,-0.2,0.5], gripper_pos, jnt_speed)
+gripper_pos = -1.0
+cartesian_speed = 0.5
+arm.MoveL([0,0,0,0.45,-0.2,0.2], gripper_pos, cartesian_speed)
+gripper_pos = 0.0
+arm.MoveC([0,0,0,0.45,0,0.4], [0,0,0,0.45,0.2,0.2], gripper_pos, cartesian_speed)
+
+# 3. highcmd_basic : armCtrlInCartesian
+arm.labelRun("forward")
+arm.startTrack(armState.CARTESIAN)
+angular_vel = 0.3
+linear_vel = 0.3
+for i in range(0, 1000):
+    arm.cartesianCtrlCmd([0,0,0,0,0,-1,-1], angular_vel, linear_vel)
+    time.sleep(arm._ctrlComp.dt)
+
+arm.backToStart()
+arm.loopOff()
+```
+请你帮我检查原因，我现在想在ROS2的框架下实现上述功能，也遇到了同样的问题。
+我的CMakeLists.txt文件如下
+```txt
+cmake_minimum_required(VERSION 3.0)
+project(z1_sdk)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -std=c++14 -pthread")
+
+include_directories(
+  include
+)
+
+link_directories(lib)
+
+set(EXAMPLES_FILES
+    examples/highcmd_basic.cpp
+    examples/highcmd_development.cpp
+    examples/lowcmd_development.cpp
+    examples/lowcmd_multirobots.cpp
+)
+
+foreach(EXAMPLE_FILE IN LISTS EXAMPLES_FILES)
+  get_filename_component(EXAMPLE_NAME ${EXAMPLE_FILE} NAME_WE)
+  add_executable(${EXAMPLE_NAME} ${EXAMPLE_FILE})
+  target_link_libraries(${EXAMPLE_NAME} Z1_SDK_${CMAKE_SYSTEM_PROCESSOR})
+endforeach()
+
+
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
+find_package(pybind11 QUIET)
+if(${pybind11_FOUND})
+  pybind11_add_module(unitree_arm_interface examples_py/arm_python_interface.cpp)
+  target_link_libraries(unitree_arm_interface PRIVATE Z1_SDK_${CMAKE_SYSTEM_PROCESSOR})
+endif()
+```
+请你帮我解决，我现在遇到的问题如下
+```zsh
+(dexmani)  sisyphus@sisyphus-dual4090  ~/ROS   master  ros2 run unitreez1 arm_controller
+
+Traceback (most recent call last):
+  File "/home/sisyphus/ROS/install/unitreez1/lib/unitreez1/arm_controller", line 33, in <module>
+    sys.exit(load_entry_point('unitreez1==0.0.0', 'console_scripts', 'arm_controller')())
+  File "/home/sisyphus/ROS/install/unitreez1/lib/unitreez1/arm_controller", line 25, in importlib_load_entry_point
+    return next(matches).load()
+  File "/usr/lib/python3.10/importlib/metadata/__init__.py", line 171, in load
+    module = import_module(match.group('module'))
+  File "/usr/lib/python3.10/importlib/__init__.py", line 126, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "<frozen importlib._bootstrap>", line 1050, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1004, in _find_and_load_unlocked
+ModuleNotFoundError: No module named 'unitreez1.arm_controller'
+[ros2run]: Process exited with failure 1
+```
